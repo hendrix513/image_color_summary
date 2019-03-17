@@ -20,13 +20,13 @@ import (
 func main() {
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
-	input_file, err := os.Open("input.txt")
+	input_file, err := os.Open(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer input_file.Close()
 
-	file, err := os.Create("op.csv")
+	file, err := os.Create(os.Args[2])
 	if err != nil {
 		log.Fatal("Cannot create file", err)
 	}
