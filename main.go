@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/csv"
 	"fmt"
-	"github.com/pkg/errors"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -13,20 +12,13 @@ import (
 	"log"
 	"net/http"
 	"os"
-	//"runtime"
+	"runtime"
 	"sync"
 	"time"
-	"runtime"
 )
-
-type Content struct {
-	url   string
-	image *image.Image
-}
 
 func main() {
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	mstart := time.Now()
 
 	input_file, err := os.Open("input.txt")
 	if err != nil {
@@ -42,18 +34,12 @@ func main() {
 
 	w := csv.NewWriter(file)
 
-	urls := make(chan string)
-
 	var io_wg sync.WaitGroup
-	var proc_wg sync.WaitGroup
-	numIOGroups := 10
-	numProcGroups := 10
+	numIOGroups := 16
 	io_sentinels := make(chan bool, numIOGroups)
-	proc_sentinels := make(chan bool, numProcGroups)
-	content_chan := make(chan *Content, numProcGroups)
+	urls := make(chan string, numIOGroups)
 
 	io_wg.Add(numIOGroups)
-	proc_wg.Add(numProcGroups)
 
 	for i := 0; i < numIOGroups; i++ {
 		go func() {
@@ -61,11 +47,10 @@ func main() {
 			for {
 				select {
 				case url := <-urls:
+				        defer runtime.GC()
 					resp, err := http.Get(url)
 					if err != nil {
-						wrappedErr := errors.Wrap(err, "[1] failed with error:")
-						fmt.Println(err)
-						fmt.Println(wrappedErr)
+						log.Fatal(err)
 						continue
 					}
 
@@ -73,47 +58,16 @@ func main() {
 
 					image, _, err := image.Decode(resp.Body)
 					if err != nil {
-						fmt.Println("decode error")
 						log.Fatal(err)
 					}
 
-					content_chan <- &Content{url: url, image: &image}
+					w.Write(ProcessFile(&image, url))
 				default:
 					select {
 					case <-io_sentinels:
 						return
 					default:
-						time.Sleep(1 * time.Second)
-						//fmt.Println("io pass")
-					}
-				}
-			}
-		}()
-	}
-
-	for i := 0; i < numProcGroups; i++ {
-		go func() {
-			defer proc_wg.Done()
-			for {
-				select {
-				case content := <-content_chan:
-					data := ProcessFile(content.image)
-
-					sl := data[:]
-
-					sl = append(sl, "")
-					copy(sl[1:], sl[:])
-					sl[0] = content.url
-					//fmt.Println(sl)
-
-					w.Write(sl)
-				default:
-					select {
-					case <-proc_sentinels:
-						return
-					default:
-						time.Sleep(1 * time.Second)
-						//fmt.Println("proc pass")
+						time.Sleep(time.Second)
 					}
 				}
 			}
@@ -128,10 +82,8 @@ func main() {
 
 		_, ok := set[url]
 		if !ok {
-			//set[url] = true
+			set[url] = true
 			urls <- scanner.Text()
-		} else {
-			fmt.Println("ALREADY PRESENT")
 		}
 	}
 
@@ -140,18 +92,10 @@ func main() {
 	}
 	io_wg.Wait()
 
-	for i := 0; i < numProcGroups; i++ {
-		proc_sentinels <- true
-	}
-	proc_wg.Wait()
-
 	w.Flush()
-
-	fmt.Println("processing took ", time.Since(mstart))
 }
 
-func ProcessFile(m *image.Image) [3]string {
-	PrintMemUsage()
+func ProcessFile(m *image.Image, url string) []string {
 	im := *m
 
 	bounds := im.Bounds()
@@ -164,10 +108,9 @@ func ProcessFile(m *image.Image) [3]string {
 	for y := min_y; y < max_y; y++ {
 		for x := min_x; x < max_x; x++ {
 			r, g, b, _ := im.At(x, y).RGBA()
-			values[[3]uint8{uint8(r>>8), uint8(g>>8), uint8(b>>8)}]++
+			values[[3]uint8{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)}]++
 		}
 	}
-	runtime.GC()
 
 	topColorCounts := [3]int{0, 0, 0}
 	topColors := [3][3]uint8{}
@@ -201,24 +144,10 @@ func ProcessFile(m *image.Image) [3]string {
 		}
 	}
 
-	topColorStrings := [3]string{}
+	topColorStrings := [4]string{url, "", "", ""}
 	for idx, l := range topColors {
-		topColorStrings[idx] = fmt.Sprintf("#%02X%02X%02X", l[0], l[1], l[2])
+		topColorStrings[idx+1] = fmt.Sprintf("#%02X%02X%02X", l[0], l[1], l[2])
 	}
 
-	return topColorStrings
-}
-
-func PrintMemUsage() {
-        var m runtime.MemStats
-        runtime.ReadMemStats(&m)
-        // For info on each, see: https://golang.org/pkg/runtime/#MemStats
-        fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
-        fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
-        fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
-        fmt.Printf("\tNumGC = %v\n", m.NumGC)
-}
-
-func bToMb(b uint64) uint64 {
-    return b / 1024 / 1024
+	return topColorStrings[:]
 }
