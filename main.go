@@ -16,6 +16,7 @@ import (
 	//"runtime"
 	"sync"
 	"time"
+	"runtime"
 )
 
 type Content struct {
@@ -26,7 +27,6 @@ type Content struct {
 func main() {
 	http.DefaultTransport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	mstart := time.Now()
-	//runtime.GOMAXPROCS(1)
 
 	input_file, err := os.Open("input.txt")
 	if err != nil {
@@ -46,8 +46,8 @@ func main() {
 
 	var io_wg sync.WaitGroup
 	var proc_wg sync.WaitGroup
-	numIOGroups := 8
-	numProcGroups := 20
+	numIOGroups := 10
+	numProcGroups := 10
 	io_sentinels := make(chan bool, numIOGroups)
 	proc_sentinels := make(chan bool, numProcGroups)
 	content_chan := make(chan *Content, numProcGroups)
@@ -61,7 +61,6 @@ func main() {
 			for {
 				select {
 				case url := <-urls:
-					//start := time.Now()
 					resp, err := http.Get(url)
 					if err != nil {
 						wrappedErr := errors.Wrap(err, "[1] failed with error:")
@@ -69,11 +68,6 @@ func main() {
 						fmt.Println(wrappedErr)
 						continue
 					}
-
-					//dur := time.Since(start)
-					//size := (max_y-min_y)*(max_x-min_x)
-					//fmt.Println("processing url took ", dur)
-					//start := time.Now()
 
 					defer resp.Body.Close()
 
@@ -83,22 +77,14 @@ func main() {
 						log.Fatal(err)
 					}
 
-					//dur = time.Since(start)
-					//size := (max_y-min_y)*(max_x-min_x)
-					//fmt.Println("getting image took ", dur)
-
-					//start = time.Now()
 					content_chan <- &Content{url: url, image: &image}
-					//dur = time.Since(start)
-					//size := (max_y-min_y)*(max_x-min_x)
-					//fmt.Println("putting on channel took ", dur)
 				default:
 					select {
 					case <-io_sentinels:
 						return
 					default:
-						time.Sleep(2 * time.Second)
-						fmt.Println("io pass")
+						time.Sleep(1 * time.Second)
+						//fmt.Println("io pass")
 					}
 				}
 			}
@@ -118,7 +104,7 @@ func main() {
 					sl = append(sl, "")
 					copy(sl[1:], sl[:])
 					sl[0] = content.url
-					fmt.Println(sl)
+					//fmt.Println(sl)
 
 					w.Write(sl)
 				default:
@@ -126,8 +112,8 @@ func main() {
 					case <-proc_sentinels:
 						return
 					default:
-						time.Sleep(2 * time.Second)
-						fmt.Println("proc pass")
+						time.Sleep(1 * time.Second)
+						//fmt.Println("proc pass")
 					}
 				}
 			}
@@ -135,9 +121,18 @@ func main() {
 	}
 
 	scanner := bufio.NewScanner(input_file)
+	set := make(map[string]bool)
 
 	for scanner.Scan() {
-		urls <- scanner.Text()
+		url := scanner.Text()
+
+		_, ok := set[url]
+		if !ok {
+			//set[url] = true
+			urls <- scanner.Text()
+		} else {
+			fmt.Println("ALREADY PRESENT")
+		}
 	}
 
 	for i := 0; i < numIOGroups; i++ {
@@ -156,29 +151,26 @@ func main() {
 }
 
 func ProcessFile(m *image.Image) [3]string {
+	PrintMemUsage()
 	im := *m
-
-	//start := time.Now()
-	// Get the data
 
 	bounds := im.Bounds()
 
 	min_x, min_y, max_x, max_y := bounds.Min.X, bounds.Min.Y,
 		bounds.Max.X, bounds.Max.Y
 
-	values := make(map[string]int)
+	values := make(map[[3]uint8]int)
 
 	for y := min_y; y < max_y; y++ {
 		for x := min_x; x < max_x; x++ {
-			r, g, b, a := im.At(x, y).RGBA()
-			h := RGBAToHex(uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8))
-			values[h]++
+			r, g, b, _ := im.At(x, y).RGBA()
+			values[[3]uint8{uint8(r>>8), uint8(g>>8), uint8(b>>8)}]++
 		}
 	}
+	runtime.GC()
 
 	topColorCounts := [3]int{0, 0, 0}
-	//topColors := [3]string{"", "", ""}
-	topColors := [3]string{}
+	topColors := [3][3]uint8{}
 	for key, val := range values {
 		if val >= topColorCounts[0] {
 			tmp := topColorCounts[0]
@@ -209,15 +201,24 @@ func ProcessFile(m *image.Image) [3]string {
 		}
 	}
 
-	//dur := time.Since(start)
-	//size := (max_y-min_y)*(max_x-min_x)
-	//fmt.Println("processing img took ", dur, size, int(dur)/size)
-	return topColors
+	topColorStrings := [3]string{}
+	for idx, l := range topColors {
+		topColorStrings[idx] = fmt.Sprintf("#%02X%02X%02X", l[0], l[1], l[2])
+	}
+
+	return topColorStrings
 }
 
-func RGBAToHex(r, g, b, a uint8) string {
-	if a == 255 {
-		return fmt.Sprintf("#%02X%02X%02X", r, g, b)
-	}
-	return fmt.Sprintf("#%02X%02X%02X%02X", r, g, b, a)
+func PrintMemUsage() {
+        var m runtime.MemStats
+        runtime.ReadMemStats(&m)
+        // For info on each, see: https://golang.org/pkg/runtime/#MemStats
+        fmt.Printf("Alloc = %v MiB", bToMb(m.Alloc))
+        fmt.Printf("\tTotalAlloc = %v MiB", bToMb(m.TotalAlloc))
+        fmt.Printf("\tSys = %v MiB", bToMb(m.Sys))
+        fmt.Printf("\tNumGC = %v\n", m.NumGC)
+}
+
+func bToMb(b uint64) uint64 {
+    return b / 1024 / 1024
 }
