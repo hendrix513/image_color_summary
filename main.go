@@ -58,7 +58,8 @@ func main() {
 
 					image, _, err := image.Decode(resp.Body)
 					if err != nil {
-						log.Fatal(err)
+						log.Println(err)
+						continue
 					}
 
 					w.Write(ProcessFile(&image, url))
